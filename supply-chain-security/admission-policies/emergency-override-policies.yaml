@@ -1,0 +1,335 @@
+# Emergency override policies and approval workflows for supply chain security
+# Provides controlled exceptions for critical security incidents and emergency deployments
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: emergency-deployment-approval
+  annotations:
+    policies.kyverno.io/title: Emergency Deployment Approval
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy allows emergency deployments with proper approval annotations
+      while maintaining audit trails and time-based restrictions.
+spec:
+  validationFailureAction: enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    - name: validate-emergency-override
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            annotations:
+              "security.policy/emergency-override": "true"
+      validate:
+        message: "Emergency override requires proper approval and justification"
+        pattern:
+          metadata:
+            annotations:
+              "security.policy/emergency-override": "true"
+              "security.policy/approver": "?*"
+              "security.policy/justification": "?*"
+              "security.policy/incident-id": "?*"
+              "security.policy/expiry": "?*"
+    
+    - name: validate-approver-authorization
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            annotations:
+              "security.policy/emergency-override": "true"
+      validate:
+        message: "Emergency override approver must be authorized"
+        deny:
+          conditions:
+            any:
+            - key: "{{ request.object.metadata.annotations.\"security.policy/approver\" }}"
+              operator: AnyNotIn
+              value:
+              - "security-team-lead@company.com"
+              - "ciso@company.com"
+              - "incident-commander@company.com"
+              - "platform-team-lead@company.com"
+
+    - name: validate-override-expiry
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            annotations:
+              "security.policy/emergency-override": "true"
+      validate:
+        message: "Emergency override has expired"
+        deny:
+          conditions:
+            any:
+            - key: "{{ time_now_utc() }}"
+              operator: GreaterThan
+              value: "{{ request.object.metadata.annotations.\"security.policy/expiry\" }}"
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: emergency-namespace-policies
+  annotations:
+    policies.kyverno.io/title: Emergency Namespace Policies
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Namespace
+    policies.kyverno.io/description: >-
+      This policy manages emergency namespaces with relaxed security policies
+      for incident response while maintaining proper controls and audit trails.
+spec:
+  validationFailureAction: enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    - name: validate-emergency-namespace
+      match:
+        any:
+        - resources:
+            kinds:
+            - Namespace
+            names:
+            - "emergency*"
+      validate:
+        message: "Emergency namespace requires proper approval and time limits"
+        pattern:
+          metadata:
+            annotations:
+              "security.policy/emergency-namespace": "true"
+              "security.policy/approver": "?*"
+              "security.policy/incident-id": "?*"
+              "security.policy/created": "?*"
+              "security.policy/expiry": "?*"
+            labels:
+              "security.policy/emergency": "true"
+
+    - name: auto-expire-emergency-namespace
+      match:
+        any:
+        - resources:
+            kinds:
+            - Namespace
+            names:
+            - "emergency*"
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            annotations:
+              "security.policy/auto-cleanup": "{{ time_add_duration(time_now_utc(), '24h') }}"
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: audit-emergency-deployments
+  annotations:
+    policies.kyverno.io/title: Audit Emergency Deployments
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy creates audit events for all emergency deployments
+      to ensure proper tracking and compliance reporting.
+spec:
+  validationFailureAction: audit
+  background: true
+  failurePolicy: Ignore
+  rules:
+    - name: audit-emergency-override
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            annotations:
+              "security.policy/emergency-override": "true"
+      validate:
+        message: >-
+          AUDIT: Emergency deployment detected - 
+          Approver: {{ request.object.metadata.annotations."security.policy/approver" }}, 
+          Incident: {{ request.object.metadata.annotations."security.policy/incident-id" }}, 
+          Justification: {{ request.object.metadata.annotations."security.policy/justification" }}
+        pattern:
+          metadata:
+            annotations:
+              "security.policy/emergency-override": "true"
+
+---
+# ConfigMap for emergency approval workflow configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: emergency-approval-config
+  namespace: kyverno
+data:
+  approvers.yaml: |
+    # Authorized emergency approvers and their roles
+    approvers:
+      - email: "security-team-lead@company.com"
+        role: "Security Team Lead"
+        max_duration: "24h"
+        approval_level: "high"
+      - email: "ciso@company.com"
+        role: "Chief Information Security Officer"
+        max_duration: "72h"
+        approval_level: "critical"
+      - email: "incident-commander@company.com"
+        role: "Incident Commander"
+        max_duration: "12h"
+        approval_level: "medium"
+      - email: "platform-team-lead@company.com"
+        role: "Platform Team Lead"
+        max_duration: "8h"
+        approval_level: "low"
+    
+    # Emergency scenarios and required approval levels
+    scenarios:
+      - type: "security-incident"
+        required_level: "high"
+        max_duration: "24h"
+      - type: "production-outage"
+        required_level: "medium"
+        max_duration: "12h"
+      - type: "compliance-issue"
+        required_level: "critical"
+        max_duration: "72h"
+      - type: "vulnerability-patch"
+        required_level: "low"
+        max_duration: "8h"
+
+  notification-config.yaml: |
+    # Notification configuration for emergency deployments
+    notifications:
+      slack:
+        webhook_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+        channel: "#security-alerts"
+      email:
+        smtp_server: "smtp.company.com"
+        recipients:
+          - "security-team@company.com"
+          - "compliance@company.com"
+      pagerduty:
+        integration_key: "YOUR_PAGERDUTY_INTEGRATION_KEY"
+
+---
+# CronJob to clean up expired emergency overrides
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cleanup-expired-emergency-overrides
+  namespace: kyverno
+spec:
+  schedule: "*/15 * * * *"  # Run every 15 minutes
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: emergency-cleanup-sa
+          containers:
+          - name: cleanup
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              #!/bin/bash
+              set -e
+              
+              echo "Checking for expired emergency overrides..."
+              CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+              
+              # Find pods with expired emergency overrides
+              kubectl get pods --all-namespaces \
+                -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.metadata.annotations.security\.policy/expiry}{"\n"}{end}' | \
+              while read namespace name expiry; do
+                if [[ -n "$expiry" && "$expiry" < "$CURRENT_TIME" ]]; then
+                  echo "Deleting expired emergency pod: $namespace/$name (expired: $expiry)"
+                  kubectl delete pod "$name" -n "$namespace" --ignore-not-found=true
+                  
+                  # Send notification about cleanup
+                  kubectl create event emergency-cleanup \
+                    --namespace="$namespace" \
+                    --reason="EmergencyOverrideExpired" \
+                    --message="Emergency override expired for pod $name, pod deleted" \
+                    --type="Warning" || true
+                fi
+              done
+              
+              # Find deployments with expired emergency overrides
+              kubectl get deployments --all-namespaces \
+                -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.metadata.annotations.security\.policy/expiry}{"\n"}{end}' | \
+              while read namespace name expiry; do
+                if [[ -n "$expiry" && "$expiry" < "$CURRENT_TIME" ]]; then
+                  echo "Removing emergency override from deployment: $namespace/$name"
+                  kubectl annotate deployment "$name" -n "$namespace" \
+                    security.policy/emergency-override- \
+                    security.policy/approver- \
+                    security.policy/justification- \
+                    security.policy/incident-id- \
+                    security.policy/expiry- || true
+                fi
+              done
+              
+              echo "Emergency override cleanup completed"
+          restartPolicy: OnFailure
+
+---
+# ServiceAccount for emergency cleanup job
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: emergency-cleanup-sa
+  namespace: kyverno
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: emergency-cleanup-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "events"]
+  verbs: ["get", "list", "delete", "create"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets"]
+  verbs: ["get", "list", "patch", "update"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: emergency-cleanup-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: emergency-cleanup-role
+subjects:
+- kind: ServiceAccount
+  name: emergency-cleanup-sa
+  namespace: kyverno

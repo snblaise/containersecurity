@@ -1,0 +1,335 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-image-signature-verification
+  annotations:
+    policies.kyverno.io/title: Require Image Signature Verification
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/minversion: 1.7.0
+    policies.kyverno.io/description: >-
+      This policy requires that all container images are signed and verified
+      before deployment. It supports both cosign and AWS Signer verification.
+spec:
+  validationFailureAction: enforce
+  background: false
+  rules:
+    - name: verify-image-signatures
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      verifyImages:
+      - imageReferences:
+        - "*"
+        attestors:
+        - entries:
+          - keys:
+              publicKeys: |-
+                -----BEGIN PUBLIC KEY-----
+                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                -----END PUBLIC KEY-----
+        - entries:
+          - keyless:
+              subject: "https://github.com/myorg/myrepo/.github/workflows/build.yml@refs/heads/main"
+              issuer: "https://token.actions.githubusercontent.com"
+              additionalExtensions:
+                githubWorkflowTrigger: push
+                githubWorkflowSha: "*"
+        - entries:
+          - certificates:
+              cert: |-
+                -----BEGIN CERTIFICATE-----
+                MIICljCCAX4CCQDKg...
+                -----END CERTIFICATE-----
+              certChain: |-
+                -----BEGIN CERTIFICATE-----
+                MIICljCCAX4CCQDKg...
+                -----END CERTIFICATE-----
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-trusted-registries
+  annotations:
+    policies.kyverno.io/title: Require Trusted Container Registries
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy ensures that container images are only pulled from
+      trusted registries and repositories.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+    - name: check-trusted-registries
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      validate:
+        message: "Images must be from trusted registries"
+        pattern:
+          spec:
+            =(securityContext):
+              runAsNonRoot: true
+            containers:
+            - name: "*"
+              image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/*"
+            =(initContainers):
+            - name: "*"
+              image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/*"
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-sbom-attestation
+  annotations:
+    policies.kyverno.io/title: Require SBOM Attestation
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy requires that container images have SBOM attestations
+      attached, ensuring supply chain transparency.
+spec:
+  validationFailureAction: enforce
+  background: false
+  rules:
+    - name: verify-sbom-attestation
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      verifyImages:
+      - imageReferences:
+        - "*"
+        attestations:
+        - predicateType: "https://spdx.dev/Document"
+          attestors:
+          - entries:
+            - keys:
+                publicKeys: |-
+                  -----BEGIN PUBLIC KEY-----
+                  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                  -----END PUBLIC KEY-----
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-vulnerability-scan-attestation
+  annotations:
+    policies.kyverno.io/title: Require Vulnerability Scan Attestation
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy requires that container images have vulnerability scan
+      attestations showing they meet security thresholds.
+spec:
+  validationFailureAction: enforce
+  background: false
+  rules:
+    - name: verify-vulnerability-attestation
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      verifyImages:
+      - imageReferences:
+        - "*"
+        attestations:
+        - predicateType: "https://in-toto.io/Statement/v0.1"
+          attestors:
+          - entries:
+            - keys:
+                publicKeys: |-
+                  -----BEGIN PUBLIC KEY-----
+                  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                  -----END PUBLIC KEY-----
+          conditions:
+          - all:
+            - key: "{{ predicate.vulnerability_scan.critical_count }}"
+              operator: LessThanOrEquals
+              value: 0
+            - key: "{{ predicate.vulnerability_scan.high_count }}"
+              operator: LessThanOrEquals
+              value: 5
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-unsigned-images
+  annotations:
+    policies.kyverno.io/title: Block Unsigned Container Images
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy blocks deployment of container images that are not
+      properly signed and verified.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+    - name: block-unsigned-images
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      exclude:
+        any:
+        - resources:
+            namespaces:
+            - kube-system
+            - kyverno
+            - cert-manager
+      validate:
+        message: "All container images must be signed and verified"
+        deny:
+          conditions:
+            any:
+            - key: "{{ request.object.metadata.annotations.\"image.signature.verified\" || 'false' }}"
+              operator: NotEquals
+              value: "true"
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-image-provenance
+  annotations:
+    policies.kyverno.io/title: Require Image Provenance
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy requires that container images have provenance attestations
+      showing they were built from trusted sources.
+spec:
+  validationFailureAction: enforce
+  background: false
+  rules:
+    - name: verify-provenance-attestation
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      verifyImages:
+      - imageReferences:
+        - "*"
+        attestations:
+        - predicateType: "https://slsa.dev/provenance/v0.2"
+          attestors:
+          - entries:
+            - keys:
+                publicKeys: |-
+                  -----BEGIN PUBLIC KEY-----
+                  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                  -----END PUBLIC KEY-----
+          conditions:
+          - all:
+            - key: "{{ predicate.builder.id }}"
+              operator: Equals
+              value: "AWS CodeBuild"
+            - key: "{{ predicate.invocation.configSource.uri }}"
+              operator: Contains
+              value: "github.com/myorg/"
+
+---
+apiVersion: kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: allow-system-images
+  namespace: kube-system
+spec:
+  exceptions:
+  - policyName: require-image-signature-verification
+    ruleNames:
+    - verify-image-signatures
+  - policyName: require-trusted-registries
+    ruleNames:
+    - check-trusted-registries
+  - policyName: block-unsigned-images
+    ruleNames:
+    - block-unsigned-images
+  match:
+  - any:
+    - resources:
+        kinds:
+        - Pod
+        - Deployment
+        - StatefulSet
+        - DaemonSet
+        namespaces:
+        - kube-system
+        - kyverno
+        - cert-manager
+        - aws-load-balancer-controller
+
+---
+apiVersion: kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: allow-emergency-deployments
+  namespace: default
+spec:
+  exceptions:
+  - policyName: require-image-signature-verification
+    ruleNames:
+    - verify-image-signatures
+  - policyName: require-sbom-attestation
+    ruleNames:
+    - verify-sbom-attestation
+  match:
+  - any:
+    - resources:
+        kinds:
+        - Pod
+        - Deployment
+        annotations:
+          security.policy/emergency-deployment: "true"
+          security.policy/approved-by: "*"
+          security.policy/ticket-number: "*"

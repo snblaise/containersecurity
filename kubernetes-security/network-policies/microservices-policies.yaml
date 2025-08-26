@@ -1,0 +1,200 @@
+# Microservices NetworkPolicies
+# Fine-grained policies for microservices architecture with service mesh integration
+
+# User service - handles user authentication and profile management
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: user-service-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: user-service
+      version: v1
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from API gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow traffic from other services that need user data
+  - from:
+    - podSelector:
+        matchLabels:
+          app: order-service
+    - podSelector:
+        matchLabels:
+          app: notification-service
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow Istio sidecar communication
+  - from:
+    - podSelector:
+        matchLabels:
+          app: istio-proxy
+    ports:
+    - protocol: TCP
+      port: 15090  # Envoy admin port
+  egress:
+  # Allow communication to user database
+  - to:
+    - podSelector:
+        matchLabels:
+          app: user-db
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow DNS and service mesh communication
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow Istio control plane communication
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: istio-system
+    ports:
+    - protocol: TCP
+      port: 15010  # Pilot
+    - protocol: TCP
+      port: 15011  # Pilot
+
+---
+# Order service - handles order processing
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: order-service-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: order-service
+      version: v1
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from API gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow traffic from payment service
+  - from:
+    - podSelector:
+        matchLabels:
+          app: payment-service
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow communication to user service
+  - to:
+    - podSelector:
+        matchLabels:
+          app: user-service
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow communication to inventory service
+  - to:
+    - podSelector:
+        matchLabels:
+          app: inventory-service
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow communication to notification service
+  - to:
+    - podSelector:
+        matchLabels:
+          app: notification-service
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow communication to order database
+  - to:
+    - podSelector:
+        matchLabels:
+          app: order-db
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow DNS and external HTTPS
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# Payment service - handles payment processing (highly restricted)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: payment-service-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: payment-service
+      version: v1
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Only allow traffic from order service
+  - from:
+    - podSelector:
+        matchLabels:
+          app: order-service
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow communication to payment database
+  - to:
+    - podSelector:
+        matchLabels:
+          app: payment-db
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow communication back to order service
+  - to:
+    - podSelector:
+        matchLabels:
+          app: order-service
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow HTTPS to external payment processors (Stripe, etc.)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443

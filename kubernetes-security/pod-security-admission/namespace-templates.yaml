@@ -1,0 +1,83 @@
+# Namespace Templates with Pod Security Admission Policies
+# These templates can be used to create namespaces with appropriate PSA configurations
+
+---
+# Template for high-security production workloads
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production-secure
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    # Additional metadata for governance
+    security.aws.com/tier: production
+    security.aws.com/compliance: pci-dss
+    security.aws.com/data-classification: confidential
+  annotations:
+    security.aws.com/description: "High-security namespace for production workloads handling sensitive data"
+    security.aws.com/owner: "platform-team@company.com"
+    security.aws.com/created-by: "aws-container-security-framework"
+
+---
+# Template for staging environment
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    security.aws.com/tier: staging
+    security.aws.com/compliance: required
+  annotations:
+    security.aws.com/description: "Staging environment with production-like security controls"
+    security.aws.com/owner: "platform-team@company.com"
+
+---
+# Template for development environment (slightly relaxed for development productivity)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: development
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    security.aws.com/tier: development
+  annotations:
+    security.aws.com/description: "Development environment with baseline security controls"
+    security.aws.com/owner: "development-team@company.com"
+
+---
+# Template for testing/QA environment
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: testing
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    security.aws.com/tier: testing
+  annotations:
+    security.aws.com/description: "Testing environment for QA and integration tests"
+    security.aws.com/owner: "qa-team@company.com"
+
+---
+# Template for system/infrastructure workloads
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: infrastructure
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+    security.aws.com/tier: infrastructure
+  annotations:
+    security.aws.com/description: "Infrastructure workloads that may require elevated privileges"
+    security.aws.com/owner: "platform-team@company.com"
+    security.aws.com/privileged-workloads: "true"

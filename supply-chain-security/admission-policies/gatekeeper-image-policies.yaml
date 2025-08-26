@@ -1,0 +1,314 @@
+# Gatekeeper policies for supply chain security and image provenance verification
+# Alternative to Kyverno for organizations using OPA Gatekeeper
+
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: requireimageprovenance
+  annotations:
+    description: "Requires container images to have valid provenance and be from approved registries"
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequireImageProvenance
+      validation:
+        type: object
+        properties:
+          allowedRegistries:
+            type: array
+            description: "List of allowed container registries"
+            items:
+              type: string
+          requiredAnnotations:
+            type: array
+            description: "Required annotations for provenance verification"
+            items:
+              type: string
+          exemptNamespaces:
+            type: array
+            description: "Namespaces exempt from this policy"
+            items:
+              type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package requireimageprovenance
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not is_allowed_registry(container.image)
+          msg := sprintf("Container image '%v' is not from an allowed registry. Allowed registries: %v", [container.image, input.parameters.allowedRegistries])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not has_required_annotations
+          msg := sprintf("Container image '%v' does not have required provenance annotations", [container.image])
+        }
+
+        is_allowed_registry(image) {
+          registry := input.parameters.allowedRegistries[_]
+          startswith(image, registry)
+        }
+
+        has_required_annotations {
+          required := input.parameters.requiredAnnotations[_]
+          input.review.object.metadata.annotations[required]
+        }
+
+        # Exempt system namespaces and emergency pods
+        violation[{"msg": msg}] {
+          not is_exempt
+          msg != ""
+        }
+
+        is_exempt {
+          input.review.object.metadata.namespace == input.parameters.exemptNamespaces[_]
+        }
+
+        is_exempt {
+          startswith(input.review.object.metadata.name, "emergency-")
+        }
+
+        is_exempt {
+          input.review.object.metadata.annotations["security.policy/emergency-override"] == "true"
+        }
+
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: requireimagesignature
+  annotations:
+    description: "Requires container images to be signed with approved keys"
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequireImageSignature
+      validation:
+        type: object
+        properties:
+          trustedKeys:
+            type: array
+            description: "List of trusted public keys for image verification"
+            items:
+              type: string
+          cosignPublicKey:
+            type: string
+            description: "Cosign public key for signature verification"
+          exemptNamespaces:
+            type: array
+            description: "Namespaces exempt from signature verification"
+            items:
+              type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package requireimagesignature
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not is_exempt
+          not has_signature_annotation(container.image)
+          msg := sprintf("Container image '%v' does not have a valid signature annotation", [container.image])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not is_exempt
+          not is_trusted_signature(container.image)
+          msg := sprintf("Container image '%v' signature is not from a trusted key", [container.image])
+        }
+
+        has_signature_annotation(image) {
+          input.review.object.metadata.annotations["cosign.sigstore.dev/signature"]
+        }
+
+        is_trusted_signature(image) {
+          # This would typically integrate with external signature verification
+          # For now, we check for the presence of signature metadata
+          input.review.object.metadata.annotations["cosign.sigstore.dev/signature"]
+          input.review.object.metadata.annotations["cosign.sigstore.dev/certificate"]
+        }
+
+        is_exempt {
+          input.review.object.metadata.namespace == input.parameters.exemptNamespaces[_]
+        }
+
+        is_exempt {
+          startswith(input.review.object.metadata.name, "emergency-")
+        }
+
+        is_exempt {
+          input.review.object.metadata.annotations["security.policy/emergency-override"] == "true"
+        }
+
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: requirevulnerabilityscan
+  annotations:
+    description: "Requires container images to have vulnerability scan results within thresholds"
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequireVulnerabilityScan
+      validation:
+        type: object
+        properties:
+          maxCriticalVulnerabilities:
+            type: integer
+            description: "Maximum allowed critical vulnerabilities"
+            default: 0
+          maxHighVulnerabilities:
+            type: integer
+            description: "Maximum allowed high vulnerabilities"
+            default: 5
+          maxMediumVulnerabilities:
+            type: integer
+            description: "Maximum allowed medium vulnerabilities"
+            default: 20
+          requiredScanners:
+            type: array
+            description: "List of approved vulnerability scanners"
+            items:
+              type: string
+          exemptNamespaces:
+            type: array
+            description: "Namespaces exempt from vulnerability scanning requirements"
+            items:
+              type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package requirevulnerabilityscan
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not is_exempt
+          not has_scan_results
+          msg := sprintf("Container image '%v' does not have vulnerability scan results", [container.image])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not is_exempt
+          exceeds_vulnerability_threshold
+          msg := sprintf("Container image '%v' exceeds vulnerability thresholds", [container.image])
+        }
+
+        has_scan_results {
+          input.review.object.metadata.annotations["security.scan/scanner"]
+          input.review.object.metadata.annotations["security.scan/timestamp"]
+        }
+
+        exceeds_vulnerability_threshold {
+          critical := to_number(input.review.object.metadata.annotations["security.scan/critical"])
+          critical > input.parameters.maxCriticalVulnerabilities
+        }
+
+        exceeds_vulnerability_threshold {
+          high := to_number(input.review.object.metadata.annotations["security.scan/high"])
+          high > input.parameters.maxHighVulnerabilities
+        }
+
+        exceeds_vulnerability_threshold {
+          medium := to_number(input.review.object.metadata.annotations["security.scan/medium"])
+          medium > input.parameters.maxMediumVulnerabilities
+        }
+
+        is_exempt {
+          input.review.object.metadata.namespace == input.parameters.exemptNamespaces[_]
+        }
+
+        is_exempt {
+          startswith(input.review.object.metadata.name, "emergency-")
+        }
+
+        is_exempt {
+          input.review.object.metadata.annotations["security.policy/emergency-override"] == "true"
+        }
+
+---
+# Constraint instances for the templates above
+
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequireImageProvenance
+metadata:
+  name: require-image-provenance
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+      - apiGroups: ["batch"]
+        kinds: ["Job", "CronJob"]
+  parameters:
+    allowedRegistries:
+      - "123456789012.dkr.ecr.us-east-1.amazonaws.com/"  # Replace with actual account
+      - "123456789012.dkr.ecr.us-west-2.amazonaws.com/"
+    requiredAnnotations:
+      - "security.provenance/source-repo"
+      - "security.provenance/build-id"
+    exemptNamespaces:
+      - "kube-system"
+      - "gatekeeper-system"
+      - "cert-manager"
+      - "emergency"
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequireImageSignature
+metadata:
+  name: require-image-signature
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+      - apiGroups: ["batch"]
+        kinds: ["Job", "CronJob"]
+  parameters:
+    trustedKeys:
+      - "cosign-public-key-1"
+      - "cosign-public-key-2"
+    exemptNamespaces:
+      - "kube-system"
+      - "gatekeeper-system"
+      - "cert-manager"
+      - "emergency"
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequireVulnerabilityScan
+metadata:
+  name: require-vulnerability-scan
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+      - apiGroups: ["batch"]
+        kinds: ["Job", "CronJob"]
+  parameters:
+    maxCriticalVulnerabilities: 0
+    maxHighVulnerabilities: 5
+    maxMediumVulnerabilities: 20
+    requiredScanners:
+      - "trivy"
+      - "inspector"
+    exemptNamespaces:
+      - "kube-system"
+      - "gatekeeper-system"
+      - "cert-manager"
+      - "emergency"

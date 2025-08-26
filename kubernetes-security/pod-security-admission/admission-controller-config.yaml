@@ -1,0 +1,29 @@
+# AdmissionConfiguration for Pod Security Admission
+# This file configures the Pod Security Admission controller at the cluster level
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: PodSecurity
+  configuration:
+    apiVersion: pod-security.admission.config.k8s.io/v1beta1
+    kind: PodSecurityConfiguration
+    # Global defaults for all namespaces
+    defaults:
+      enforce: "restricted"
+      enforce-version: "latest"
+      audit: "restricted"
+      audit-version: "latest"
+      warn: "restricted"
+      warn-version: "latest"
+    # Exemptions for system namespaces
+    exemptions:
+      usernames: []
+      runtimeClasses: []
+      namespaces:
+        - kube-system
+        - kube-public
+        - kube-node-lease
+        - aws-load-balancer-controller
+        - cert-manager
+        - external-dns
+        - cluster-autoscaler

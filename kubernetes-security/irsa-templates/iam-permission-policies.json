@@ -1,0 +1,313 @@
+{
+  "comment": "IAM Permission Policy Templates for IRSA - Least Privilege Examples",
+  "description": "These policies grant minimal permissions required for specific AWS services",
+
+  "s3_read_only_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:ListBucket"
+        ],
+        "Resource": [
+          "arn:aws:s3:::my-app-bucket",
+          "arn:aws:s3:::my-app-bucket/*"
+        ]
+      }
+    ]
+  },
+
+  "s3_read_write_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:PutObject",
+          "s3:PutObjectAcl",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ],
+        "Resource": [
+          "arn:aws:s3:::my-app-bucket",
+          "arn:aws:s3:::my-app-bucket/*"
+        ]
+      }
+    ]
+  },
+
+  "secrets_manager_read_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/app/*",
+          "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shared/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Decrypt"
+        ],
+        "Resource": [
+          "arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "kms:ViaService": "secretsmanager.REGION.amazonaws.com"
+          }
+        }
+      }
+    ]
+  },
+
+  "cloudwatch_logs_write_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ],
+        "Resource": [
+          "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/eks/cluster-name/*",
+          "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/app/*"
+        ]
+      }
+    ]
+  },
+
+  "rds_connect_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "rds-db:connect"
+        ],
+        "Resource": [
+          "arn:aws:rds-db:REGION:ACCOUNT_ID:dbuser:db-instance-id/db-username"
+        ]
+      }
+    ]
+  },
+
+  "ecr_read_only_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "ecr:GetAuthorizationToken"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage"
+        ],
+        "Resource": [
+          "arn:aws:ecr:REGION:ACCOUNT_ID:repository/my-app/*"
+        ]
+      }
+    ]
+  },
+
+  "parameter_store_read_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath"
+        ],
+        "Resource": [
+          "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/app/*",
+          "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/shared/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Decrypt"
+        ],
+        "Resource": [
+          "arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "kms:ViaService": "ssm.REGION.amazonaws.com"
+          }
+        }
+      }
+    ]
+  },
+
+  "sqs_read_write_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:SendMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl"
+        ],
+        "Resource": [
+          "arn:aws:sqs:REGION:ACCOUNT_ID:my-app-queue",
+          "arn:aws:sqs:REGION:ACCOUNT_ID:my-app-dlq"
+        ]
+      }
+    ]
+  },
+
+  "sns_publish_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "sns:Publish"
+        ],
+        "Resource": [
+          "arn:aws:sns:REGION:ACCOUNT_ID:my-app-notifications"
+        ]
+      }
+    ]
+  },
+
+  "dynamodb_read_write_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ],
+        "Resource": [
+          "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/my-app-table",
+          "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/my-app-table/index/*"
+        ]
+      }
+    ]
+  },
+
+  "kms_encrypt_decrypt_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ],
+        "Resource": [
+          "arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID"
+        ]
+      }
+    ]
+  },
+
+  "multi_service_policy": {
+    "comment": "Example of a policy with multiple services - use sparingly",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:PutObject"
+        ],
+        "Resource": [
+          "arn:aws:s3:::my-app-bucket/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/app/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": [
+          "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/app/*"
+        ]
+      }
+    ]
+  },
+
+  "development_policy": {
+    "comment": "More permissive policy for development environments",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:*"
+        ],
+        "Resource": [
+          "arn:aws:s3:::dev-*",
+          "arn:aws:s3:::dev-*/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:CreateSecret",
+          "secretsmanager:UpdateSecret"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:dev/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:*"
+        ],
+        "Resource": [
+          "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/dev/*"
+        ]
+      }
+    ]
+  }
+}

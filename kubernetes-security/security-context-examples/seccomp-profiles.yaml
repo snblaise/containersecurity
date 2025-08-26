@@ -1,0 +1,283 @@
+# Seccomp Profile Examples
+# These examples demonstrate different seccomp profile configurations
+
+---
+# Example 1: Pod with RuntimeDefault seccomp profile (recommended)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: seccomp-runtime-default
+  namespace: production
+  labels:
+    app: seccomp-example
+    security.aws.com/seccomp-profile: runtime-default
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    
+    # Use the runtime default seccomp profile
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containers:
+  - name: app-container
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "while true; do echo 'Running with RuntimeDefault seccomp'; sleep 30; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      runAsNonRoot: true
+      runAsUser: 65534
+    
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+    
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+  
+  volumes:
+  - name: tmp-volume
+    emptyDir:
+      sizeLimit: "50Mi"
+
+---
+# Example 2: Pod with custom seccomp profile (advanced use case)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: seccomp-custom-profile
+  namespace: production
+  labels:
+    app: seccomp-custom-example
+    security.aws.com/seccomp-profile: custom
+  annotations:
+    security.aws.com/seccomp-profile-path: "profiles/restricted-app.json"
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    
+    # Use a custom seccomp profile (must exist on the node)
+    seccompProfile:
+      type: Localhost
+      localhostProfile: profiles/restricted-app.json
+  
+  containers:
+  - name: restricted-app
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "while true; do echo 'Running with custom seccomp profile'; sleep 30; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      runAsNonRoot: true
+      runAsUser: 1000
+    
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+    
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+  
+  volumes:
+  - name: tmp-volume
+    emptyDir:
+      sizeLimit: "50Mi"
+
+---
+# Example 3: Container-level seccomp override
+apiVersion: v1
+kind: Pod
+metadata:
+  name: seccomp-container-override
+  namespace: production
+  labels:
+    app: seccomp-override-example
+spec:
+  # Pod-level seccomp profile
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containers:
+  # Container 1: Uses pod-level seccomp profile
+  - name: standard-container
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "while true; do echo 'Standard container'; sleep 30; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      runAsNonRoot: true
+      runAsUser: 1000
+    
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+    
+    volumeMounts:
+    - name: tmp-volume-1
+      mountPath: /tmp
+  
+  # Container 2: Overrides with Unconfined (NOT recommended for production)
+  - name: unconfined-container
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "while true; do echo 'Unconfined container (NOT recommended)'; sleep 30; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      runAsNonRoot: true
+      runAsUser: 1000
+      
+      # Override pod-level seccomp with Unconfined (NOT recommended)
+      seccompProfile:
+        type: Unconfined
+    
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+    
+    volumeMounts:
+    - name: tmp-volume-2
+      mountPath: /tmp
+  
+  volumes:
+  - name: tmp-volume-1
+    emptyDir:
+      sizeLimit: "50Mi"
+  - name: tmp-volume-2
+    emptyDir:
+      sizeLimit: "50Mi"
+
+---
+# Example 4: Deployment with consistent seccomp configuration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seccomp-deployment
+  namespace: production
+  labels:
+    app: seccomp-deployment
+    security.aws.com/seccomp-profile: runtime-default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: seccomp-deployment
+  template:
+    metadata:
+      labels:
+        app: seccomp-deployment
+        security.aws.com/seccomp-profile: runtime-default
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+      - name: web-app
+        image: nginx:1.21-alpine
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10001
+          
+          # Inherit seccomp from pod level (RuntimeDefault)
+          # No need to specify seccompProfile here
+        
+        ports:
+        - containerPort: 8080
+          name: http
+        
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+        
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: var-cache-nginx
+          mountPath: /var/cache/nginx
+        - name: var-run
+          mountPath: /var/run
+        
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      
+      volumes:
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: "100Mi"
+      - name: var-cache-nginx
+        emptyDir:
+          sizeLimit: "100Mi"
+      - name: var-run
+        emptyDir:
+          sizeLimit: "10Mi"

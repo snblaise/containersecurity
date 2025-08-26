@@ -1,0 +1,239 @@
+version: 0.2
+
+# CodeBuild buildspec for supply chain security gates
+# Implements SAST, SCA scanning with build failure logic for critical vulnerabilities
+# Records provenance metadata in build artifacts
+
+env:
+  variables:
+    # Security scanning thresholds
+    MAX_CRITICAL_VULNERABILITIES: "0"
+    MAX_HIGH_VULNERABILITIES: "5"
+    MAX_MEDIUM_VULNERABILITIES: "20"
+    
+    # Tool versions
+    SEMGREP_VERSION: "1.45.0"
+    TRIVY_VERSION: "0.48.0"
+    SYFT_VERSION: "0.95.0"
+    COSIGN_VERSION: "2.2.1"
+
+phases:
+  install:
+    runtime-versions:
+      docker: 20
+      python: 3.11
+    commands:
+      - echo "Installing security scanning tools..."
+      
+      # Install Semgrep for SAST
+      - pip install semgrep==$SEMGREP_VERSION
+      
+      # Install Trivy for SCA and container scanning
+      - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v$TRIVY_VERSION
+      
+      # Install Syft for SBOM generation
+      - curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v$SYFT_VERSION
+      
+      # Install Cosign for image signing
+      - curl -O -L "https://github.com/sigstore/cosign/releases/download/v$COSIGN_VERSION/cosign-linux-amd64"
+      - mv cosign-linux-amd64 /usr/local/bin/cosign
+      - chmod +x /usr/local/bin/cosign
+
+  pre_build:
+    commands:
+      - echo "Starting supply chain security gates..."
+      - echo "Build started on `date`"
+      - echo "Commit SHA: $CODEBUILD_RESOLVED_SOURCE_VERSION"
+      - echo "Branch: $CODEBUILD_WEBHOOK_HEAD_REF"
+      
+      # Create provenance metadata
+      - mkdir -p /tmp/provenance
+      - |
+        cat > /tmp/provenance/build-metadata.json << EOF
+        {
+          "buildId": "$CODEBUILD_BUILD_ID",
+          "buildNumber": "$CODEBUILD_BUILD_NUMBER",
+          "sourceVersion": "$CODEBUILD_RESOLVED_SOURCE_VERSION",
+          "sourceLocation": "$CODEBUILD_SOURCE_REPO_URL",
+          "branch": "$CODEBUILD_WEBHOOK_HEAD_REF",
+          "buildStartTime": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "buildEnvironment": {
+            "image": "$CODEBUILD_BUILD_IMAGE",
+            "computeType": "$CODEBUILD_COMPUTE_TYPE",
+            "region": "$AWS_DEFAULT_REGION"
+          },
+          "tools": {
+            "semgrep": "$SEMGREP_VERSION",
+            "trivy": "$TRIVY_VERSION",
+            "syft": "$SYFT_VERSION",
+            "cosign": "$COSIGN_VERSION"
+          }
+        }
+        EOF
+
+  build:
+    commands:
+      - echo "Phase 1: Static Application Security Testing (SAST)"
+      
+      # Run Semgrep SAST scanning
+      - |
+        echo "Running Semgrep SAST scan..."
+        semgrep --config=auto --json --output=/tmp/sast-results.json . || true
+        
+        # Parse SAST results and check for critical issues
+        CRITICAL_SAST=$(cat /tmp/sast-results.json | jq '.results | map(select(.extra.severity == "ERROR")) | length')
+        HIGH_SAST=$(cat /tmp/sast-results.json | jq '.results | map(select(.extra.severity == "WARNING")) | length')
+        
+        echo "SAST Results: $CRITICAL_SAST critical, $HIGH_SAST high severity issues"
+        
+        # Record SAST results in provenance
+        jq --argjson critical "$CRITICAL_SAST" --argjson high "$HIGH_SAST" \
+           '.sastScan = {critical: $critical, high: $high, timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")}' \
+           /tmp/provenance/build-metadata.json > /tmp/provenance/temp.json && \
+           mv /tmp/provenance/temp.json /tmp/provenance/build-metadata.json
+        
+        # Fail build if critical SAST issues found
+        if [ "$CRITICAL_SAST" -gt 0 ]; then
+          echo "SECURITY GATE FAILURE: $CRITICAL_SAST critical SAST vulnerabilities detected"
+          echo "Build failed due to critical security issues in source code"
+          exit 1
+        fi
+      
+      - echo "Phase 2: Software Composition Analysis (SCA)"
+      
+      # Run Trivy for dependency scanning
+      - |
+        echo "Running Trivy SCA scan..."
+        trivy fs --format json --output /tmp/sca-results.json . || true
+        
+        # Parse SCA results
+        CRITICAL_SCA=$(cat /tmp/sca-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length')
+        HIGH_SCA=$(cat /tmp/sca-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length')
+        MEDIUM_SCA=$(cat /tmp/sca-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length')
+        
+        echo "SCA Results: $CRITICAL_SCA critical, $HIGH_SCA high, $MEDIUM_SCA medium vulnerabilities"
+        
+        # Record SCA results in provenance
+        jq --argjson critical "$CRITICAL_SCA" --argjson high "$HIGH_SCA" --argjson medium "$MEDIUM_SCA" \
+           '.scaScan = {critical: $critical, high: $high, medium: $medium, timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")}' \
+           /tmp/provenance/build-metadata.json > /tmp/provenance/temp.json && \
+           mv /tmp/provenance/temp.json /tmp/provenance/build-metadata.json
+        
+        # Apply security gate thresholds
+        if [ "$CRITICAL_SCA" -gt "$MAX_CRITICAL_VULNERABILITIES" ]; then
+          echo "SECURITY GATE FAILURE: $CRITICAL_SCA critical vulnerabilities exceed threshold of $MAX_CRITICAL_VULNERABILITIES"
+          exit 1
+        fi
+        
+        if [ "$HIGH_SCA" -gt "$MAX_HIGH_VULNERABILITIES" ]; then
+          echo "SECURITY GATE FAILURE: $HIGH_SCA high vulnerabilities exceed threshold of $MAX_HIGH_VULNERABILITIES"
+          exit 1
+        fi
+        
+        if [ "$MEDIUM_SCA" -gt "$MAX_MEDIUM_VULNERABILITIES" ]; then
+          echo "SECURITY GATE FAILURE: $MEDIUM_SCA medium vulnerabilities exceed threshold of $MAX_MEDIUM_VULNERABILITIES"
+          exit 1
+        fi
+      
+      - echo "Phase 3: Container Image Build and Scanning"
+      
+      # Build container image
+      - |
+        if [ -f Dockerfile ]; then
+          echo "Building container image..."
+          IMAGE_TAG="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$CODEBUILD_RESOLVED_SOURCE_VERSION"
+          docker build -t $IMAGE_TAG .
+          
+          # Generate SBOM for the built image
+          echo "Generating SBOM..."
+          syft $IMAGE_TAG -o spdx-json=/tmp/sbom.json
+          
+          # Scan the built image
+          echo "Scanning container image..."
+          trivy image --format json --output /tmp/image-scan-results.json $IMAGE_TAG || true
+          
+          # Parse image scan results
+          CRITICAL_IMAGE=$(cat /tmp/image-scan-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length')
+          HIGH_IMAGE=$(cat /tmp/image-scan-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length')
+          
+          echo "Image scan results: $CRITICAL_IMAGE critical, $HIGH_IMAGE high vulnerabilities"
+          
+          # Record image scan results in provenance
+          jq --argjson critical "$CRITICAL_IMAGE" --argjson high "$HIGH_IMAGE" --arg imageTag "$IMAGE_TAG" \
+             '.imageScan = {critical: $critical, high: $high, imageTag: $imageTag, timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")}' \
+             /tmp/provenance/build-metadata.json > /tmp/provenance/temp.json && \
+             mv /tmp/provenance/temp.json /tmp/provenance/build-metadata.json
+          
+          # Apply image security gates
+          if [ "$CRITICAL_IMAGE" -gt "$MAX_CRITICAL_VULNERABILITIES" ]; then
+            echo "SECURITY GATE FAILURE: $CRITICAL_IMAGE critical image vulnerabilities exceed threshold"
+            exit 1
+          fi
+          
+          if [ "$HIGH_IMAGE" -gt "$MAX_HIGH_VULNERABILITIES" ]; then
+            echo "SECURITY GATE FAILURE: $HIGH_IMAGE high image vulnerabilities exceed threshold"
+            exit 1
+          fi
+          
+          echo "Container image passed security gates"
+        else
+          echo "No Dockerfile found, skipping container image build"
+        fi
+
+  post_build:
+    commands:
+      - echo "Phase 4: Provenance and Artifact Generation"
+      
+      # Finalize provenance metadata
+      - |
+        jq '.buildEndTime = now | strftime("%Y-%m-%dT%H:%M:%SZ")' \
+           /tmp/provenance/build-metadata.json > /tmp/provenance/temp.json && \
+           mv /tmp/provenance/temp.json /tmp/provenance/build-metadata.json
+        
+        # Calculate build duration
+        START_TIME=$(jq -r '.buildStartTime' /tmp/provenance/build-metadata.json)
+        END_TIME=$(jq -r '.buildEndTime' /tmp/provenance/build-metadata.json)
+        
+        echo "Build completed successfully"
+        echo "Security gates passed: SAST, SCA, and Image scanning"
+        echo "Provenance metadata generated"
+      
+      # Push image to ECR if build succeeded
+      - |
+        if [ -f Dockerfile ] && [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ]; then
+          echo "Logging in to Amazon ECR..."
+          aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+          
+          echo "Pushing image to ECR..."
+          docker push $IMAGE_TAG
+          
+          # Store image digest for provenance
+          IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $IMAGE_TAG | cut -d'@' -f2)
+          jq --arg digest "$IMAGE_DIGEST" '.imageScan.digest = $digest' \
+             /tmp/provenance/build-metadata.json > /tmp/provenance/temp.json && \
+             mv /tmp/provenance/temp.json /tmp/provenance/build-metadata.json
+          
+          echo "Image pushed successfully: $IMAGE_TAG"
+          echo "Image digest: $IMAGE_DIGEST"
+        fi
+
+artifacts:
+  files:
+    - '/tmp/provenance/build-metadata.json'
+    - '/tmp/sast-results.json'
+    - '/tmp/sca-results.json'
+    - '/tmp/image-scan-results.json'
+    - '/tmp/sbom.json'
+  name: security-scan-artifacts
+  base-directory: /tmp
+
+reports:
+  sast-report:
+    files:
+      - '/tmp/sast-results.json'
+    file-format: 'SEMGREPJSON'
+  
+  sca-report:
+    files:
+      - '/tmp/sca-results.json'
+    file-format: 'TRIVYJSON'

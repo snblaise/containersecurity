@@ -1,0 +1,456 @@
+# Linux Capabilities Examples
+# These examples demonstrate proper capability management in containers
+
+---
+# Example 1: Web server with minimal capabilities (recommended approach)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-server-minimal-caps
+  namespace: production
+  labels:
+    app: web-server
+    security.aws.com/capabilities: minimal
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containers:
+  - name: nginx
+    image: nginx:1.21-alpine
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      
+      # Drop all capabilities (most secure approach)
+      capabilities:
+        drop:
+        - ALL
+        # No capabilities added - runs on port 8080 instead of 80
+      
+      runAsNonRoot: true
+      runAsUser: 65534
+    
+    ports:
+    - containerPort: 8080
+      name: http
+    
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+    
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+    - name: var-cache-nginx
+      mountPath: /var/cache/nginx
+    - name: var-run
+      mountPath: /var/run
+    - name: nginx-config
+      mountPath: /etc/nginx/nginx.conf
+      subPath: nginx.conf
+      readOnly: true
+    
+    env:
+    - name: NGINX_PORT
+      value: "8080"
+  
+  volumes:
+  - name: tmp-volume
+    emptyDir:
+      sizeLimit: "100Mi"
+  - name: var-cache-nginx
+    emptyDir:
+      sizeLimit: "100Mi"
+  - name: var-run
+    emptyDir:
+      sizeLimit: "10Mi"
+  - name: nginx-config
+    configMap:
+      name: nginx-config-8080
+
+---
+# Example 2: Web server that needs to bind to privileged port (less secure)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-server-privileged-port
+  namespace: production
+  labels:
+    app: web-server-privileged
+    security.aws.com/capabilities: net-bind-service
+  annotations:
+    security.aws.com/justification: "Legacy application requires port 80"
+    security.aws.com/approved-by: "security-team@company.com"
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containers:
+  - name: nginx
+    image: nginx:1.21-alpine
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      
+      capabilities:
+        drop:
+        - ALL
+        add:
+        - NET_BIND_SERVICE  # Only capability needed for binding to port < 1024
+      
+      runAsNonRoot: true
+      runAsUser: 65534
+    
+    ports:
+    - containerPort: 80
+      name: http
+    
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+    
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+    - name: var-cache-nginx
+      mountPath: /var/cache/nginx
+    - name: var-run
+      mountPath: /var/run
+  
+  volumes:
+  - name: tmp-volume
+    emptyDir:
+      sizeLimit: "100Mi"
+  - name: var-cache-nginx
+    emptyDir:
+      sizeLimit: "100Mi"
+  - name: var-run
+    emptyDir:
+      sizeLimit: "10Mi"
+
+---
+# Example 3: Database container with required capabilities
+apiVersion: v1
+kind: Pod
+metadata:
+  name: database-with-capabilities
+  namespace: production
+  labels:
+    app: database
+    security.aws.com/capabilities: database-required
+  annotations:
+    security.aws.com/justification: "Database requires file ownership and permission management"
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999  # postgres user
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containers:
+  - name: postgres
+    image: postgres:14-alpine
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      
+      capabilities:
+        drop:
+        - ALL
+        add:
+        - CHOWN          # Change file ownership
+        - DAC_OVERRIDE   # Bypass file read/write/execute permission checks
+        - FOWNER         # Bypass permission checks on operations that normally require the file system UID
+        - FSETID         # Don't clear set-user-ID and set-group-ID bits when a file is modified
+        - SETGID         # Make arbitrary manipulations of process GIDs
+        - SETUID         # Make arbitrary manipulations of process UIDs
+      
+      runAsNonRoot: true
+      runAsUser: 999
+    
+    ports:
+    - containerPort: 5432
+      name: postgres
+    
+    resources:
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+    
+    volumeMounts:
+    - name: postgres-data
+      mountPath: /var/lib/postgresql/data
+    - name: postgres-tmp
+      mountPath: /tmp
+    - name: postgres-run
+      mountPath: /var/run/postgresql
+    
+    env:
+    - name: POSTGRES_DB
+      value: "appdb"
+    - name: POSTGRES_USER
+      valueFrom:
+        secretKeyRef:
+          name: postgres-credentials
+          key: username
+    - name: POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: postgres-credentials
+          key: password
+    - name: PGDATA
+      value: /var/lib/postgresql/data/pgdata
+  
+  volumes:
+  - name: postgres-data
+    persistentVolumeClaim:
+      claimName: postgres-data-pvc
+  - name: postgres-tmp
+    emptyDir:
+      sizeLimit: "100Mi"
+  - name: postgres-run
+    emptyDir:
+      sizeLimit: "10Mi"
+
+---
+# Example 4: Network utility container (for debugging - NOT for production)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: network-debug-container
+  namespace: development  # Only for development/debugging
+  labels:
+    app: network-debug
+    security.aws.com/capabilities: network-debug
+    security.aws.com/environment: development-only
+  annotations:
+    security.aws.com/justification: "Network debugging tools for development"
+    security.aws.com/warning: "NOT FOR PRODUCTION USE"
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containers:
+  - name: network-tools
+    image: nicolaka/netshoot:latest
+    command: ["/bin/bash", "-c", "while true; do sleep 3600; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      
+      capabilities:
+        drop:
+        - ALL
+        add:
+        - NET_RAW        # Use raw sockets (for ping, traceroute)
+        - NET_ADMIN      # Network administration (for advanced debugging)
+        # WARNING: These capabilities should NEVER be used in production
+      
+      runAsNonRoot: true
+      runAsUser: 1000
+    
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+    
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+  
+  volumes:
+  - name: tmp-volume
+    emptyDir:
+      sizeLimit: "100Mi"
+
+---
+# Example 5: Init container with elevated capabilities (setup only)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-with-init-capabilities
+  namespace: production
+  labels:
+    app: app-with-init
+    security.aws.com/capabilities: init-setup
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  
+  initContainers:
+  - name: setup-permissions
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "chown -R 1000:1000 /shared-data && chmod 755 /shared-data"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      
+      capabilities:
+        drop:
+        - ALL
+        add:
+        - CHOWN    # Required for changing ownership
+        - FOWNER   # Required for changing permissions
+      
+      # Init container runs as root for setup, then main container runs as non-root
+      runAsNonRoot: false
+      runAsUser: 0
+    
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+    
+    volumeMounts:
+    - name: shared-data
+      mountPath: /shared-data
+    - name: init-tmp
+      mountPath: /tmp
+  
+  containers:
+  - name: main-app
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "while true; do echo 'App running'; sleep 30; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      
+      # Main container has no capabilities
+      capabilities:
+        drop:
+        - ALL
+      
+      runAsNonRoot: true
+      runAsUser: 1000
+    
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+    
+    volumeMounts:
+    - name: shared-data
+      mountPath: /app/data
+    - name: app-tmp
+      mountPath: /tmp
+  
+  volumes:
+  - name: shared-data
+    emptyDir:
+      sizeLimit: "1Gi"
+  - name: init-tmp
+    emptyDir:
+      sizeLimit: "50Mi"
+  - name: app-tmp
+    emptyDir:
+      sizeLimit: "100Mi"
+
+---
+# Example 6: Capability reference and security guidelines
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: capability-security-guidelines
+  namespace: production
+data:
+  capability-reference.md: |
+    # Linux Capabilities Security Guidelines
+    
+    ## Recommended Approach
+    Always start with dropping ALL capabilities and only add what's absolutely necessary.
+    
+    ## Common Capabilities and Their Security Implications
+    
+    ### LOW RISK (generally safe to add if needed)
+    - NET_BIND_SERVICE: Bind to ports < 1024
+      - Use case: Web servers that must bind to port 80/443
+      - Alternative: Use port 8080/8443 and load balancer
+    
+    ### MEDIUM RISK (use with caution)
+    - CHOWN: Change file ownership
+      - Use case: Applications that need to change file ownership
+      - Risk: Can be used to gain access to files owned by other users
+    
+    - FOWNER: Bypass file ownership checks
+      - Use case: Applications that need to modify files they don't own
+      - Risk: Can bypass file system security
+    
+    - SETUID/SETGID: Change user/group ID
+      - Use case: Applications that need to switch users
+      - Risk: Can be used for privilege escalation
+    
+    ### HIGH RISK (avoid in production)
+    - SYS_ADMIN: System administration
+      - Risk: Extremely broad privileges, almost equivalent to root
+    
+    - NET_ADMIN: Network administration
+      - Risk: Can modify network configuration, create network namespaces
+    
+    - SYS_PTRACE: Trace processes
+      - Risk: Can debug and modify other processes
+    
+    - NET_RAW: Use raw sockets
+      - Risk: Can craft malicious network packets
+    
+    ### NEVER USE IN PRODUCTION
+    - SYS_MODULE: Load/unload kernel modules
+    - SYS_RAWIO: Raw I/O operations
+    - SYS_BOOT: Reboot system
+    
+    ## Best Practices
+    1. Always drop ALL capabilities first
+    2. Add only the minimum required capabilities
+    3. Document why each capability is needed
+    4. Get security team approval for any capabilities
+    5. Use init containers for setup tasks requiring elevated privileges
+    6. Monitor capability usage in production
+    7. Regular security reviews of capability assignments

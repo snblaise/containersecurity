@@ -1,0 +1,15 @@
+# Default Deny Ingress NetworkPolicy
+# This policy denies all incoming traffic while allowing outbound traffic
+# Useful for workloads that need to make external calls but shouldn't receive traffic
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  # No ingress rules = deny all incoming traffic
+  # Egress is not specified, so it remains unrestricted

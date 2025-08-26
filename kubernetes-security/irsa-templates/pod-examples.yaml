@@ -1,0 +1,383 @@
+# Pod Examples Using IRSA Service Accounts
+# These examples show how to use IRSA service accounts in pod specifications
+
+---
+# Example 1: Pod using S3 access service account
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s3-access-pod
+  namespace: production
+  labels:
+    app: s3-access-app
+    security.aws.com/irsa-enabled: "true"
+spec:
+  # Use the IRSA service account
+  serviceAccountName: s3-access-service-account
+  
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containers:
+  - name: s3-app
+    image: alpine:3.18
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      # Install AWS CLI
+      apk add --no-cache aws-cli
+      
+      # Test S3 access using IRSA credentials
+      echo "Testing S3 access with IRSA..."
+      aws sts get-caller-identity
+      aws s3 ls s3://my-app-bucket/
+      
+      # Keep container running
+      while true; do sleep 30; done
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      runAsNonRoot: true
+      runAsUser: 65534
+    
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+    
+    # Environment variables for AWS SDK
+    env:
+    - name: AWS_REGION
+      value: "us-east-1"
+    - name: AWS_DEFAULT_REGION
+      value: "us-east-1"
+    # AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE are automatically set by EKS
+    
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+    - name: aws-token
+      mountPath: /var/run/secrets/eks.amazonaws.com/serviceaccount
+      readOnly: true
+  
+  volumes:
+  - name: tmp-volume
+    emptyDir:
+      sizeLimit: "100Mi"
+  - name: aws-token
+    projected:
+      sources:
+      - serviceAccountToken:
+          path: token
+          expirationSeconds: 86400
+          audience: sts.amazonaws.com
+
+---
+# Example 2: Deployment using Secrets Manager service account
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secrets-manager-app
+  namespace: production
+  labels:
+    app: secrets-manager-app
+    security.aws.com/irsa-enabled: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: secrets-manager-app
+  template:
+    metadata:
+      labels:
+        app: secrets-manager-app
+        security.aws.com/irsa-enabled: "true"
+    spec:
+      serviceAccountName: secrets-manager-service-account
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+      - name: app
+        image: alpine:3.18
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          # Install AWS CLI and jq
+          apk add --no-cache aws-cli jq
+          
+          # Retrieve secrets from AWS Secrets Manager
+          echo "Retrieving database credentials..."
+          DB_SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id prod/app/database \
+            --query SecretString --output text)
+          
+          DB_USERNAME=$(echo $DB_SECRET | jq -r .username)
+          DB_PASSWORD=$(echo $DB_SECRET | jq -r .password)
+          
+          echo "Database username: $DB_USERNAME"
+          echo "Database password: [REDACTED]"
+          
+          # Keep container running
+          while true; do sleep 30; done
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+        
+        env:
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: AWS_DEFAULT_REGION
+          value: "us-east-1"
+        
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+      
+      volumes:
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: "100Mi"
+
+---
+# Example 3: Job using CloudWatch Logs service account
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cloudwatch-logs-job
+  namespace: production
+  labels:
+    app: cloudwatch-logs-job
+    security.aws.com/irsa-enabled: "true"
+spec:
+  template:
+    metadata:
+      labels:
+        app: cloudwatch-logs-job
+        security.aws.com/irsa-enabled: "true"
+    spec:
+      serviceAccountName: cloudwatch-logs-service-account
+      restartPolicy: Never
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+      - name: log-sender
+        image: alpine:3.18
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          # Install AWS CLI
+          apk add --no-cache aws-cli
+          
+          # Create log group if it doesn't exist
+          aws logs create-log-group \
+            --log-group-name /app/batch-jobs \
+            --region us-east-1 || true
+          
+          # Create log stream
+          LOG_STREAM="job-$(date +%Y%m%d-%H%M%S)"
+          aws logs create-log-stream \
+            --log-group-name /app/batch-jobs \
+            --log-stream-name $LOG_STREAM \
+            --region us-east-1
+          
+          # Send log events
+          for i in $(seq 1 10); do
+            TIMESTAMP=$(date +%s)000
+            MESSAGE="Job execution step $i at $(date)"
+            
+            aws logs put-log-events \
+              --log-group-name /app/batch-jobs \
+              --log-stream-name $LOG_STREAM \
+              --log-events timestamp=$TIMESTAMP,message="$MESSAGE" \
+              --region us-east-1
+            
+            echo "Sent log: $MESSAGE"
+            sleep 2
+          done
+          
+          echo "Job completed successfully"
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+        
+        env:
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: AWS_DEFAULT_REGION
+          value: "us-east-1"
+        
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+      
+      volumes:
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: "100Mi"
+
+---
+# Example 4: CronJob using multiple AWS services
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: multi-service-cronjob
+  namespace: production
+  labels:
+    app: multi-service-cronjob
+    security.aws.com/irsa-enabled: "true"
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: multi-service-cronjob
+            security.aws.com/irsa-enabled: "true"
+        spec:
+          serviceAccountName: multi-service-account
+          restartPolicy: OnFailure
+          
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          
+          containers:
+          - name: backup-job
+            image: alpine:3.18
+            command: ["/bin/sh", "-c"]
+            args:
+            - |
+              # Install required tools
+              apk add --no-cache aws-cli jq
+              
+              echo "Starting daily backup job..."
+              
+              # Get database credentials from Secrets Manager
+              DB_SECRET=$(aws secretsmanager get-secret-value \
+                --secret-id prod/app/database \
+                --query SecretString --output text)
+              
+              DB_HOST=$(echo $DB_SECRET | jq -r .host)
+              DB_NAME=$(echo $DB_SECRET | jq -r .database)
+              
+              # Create backup (simulated)
+              BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S).sql"
+              echo "Creating backup: $BACKUP_FILE"
+              echo "-- Database backup for $DB_NAME from $DB_HOST" > /tmp/$BACKUP_FILE
+              echo "-- Generated at $(date)" >> /tmp/$BACKUP_FILE
+              
+              # Upload to S3
+              aws s3 cp /tmp/$BACKUP_FILE s3://my-app-backups/$BACKUP_FILE
+              
+              # Log completion to CloudWatch
+              aws logs create-log-group \
+                --log-group-name /app/backup-jobs \
+                --region us-east-1 || true
+              
+              LOG_STREAM="backup-$(date +%Y%m%d)"
+              aws logs create-log-stream \
+                --log-group-name /app/backup-jobs \
+                --log-stream-name $LOG_STREAM \
+                --region us-east-1 || true
+              
+              TIMESTAMP=$(date +%s)000
+              MESSAGE="Backup completed: $BACKUP_FILE"
+              
+              aws logs put-log-events \
+                --log-group-name /app/backup-jobs \
+                --log-stream-name $LOG_STREAM \
+                --log-events timestamp=$TIMESTAMP,message="$MESSAGE" \
+                --region us-east-1
+              
+              echo "Backup job completed successfully"
+            
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop:
+                - ALL
+              runAsNonRoot: true
+              runAsUser: 1000
+            
+            resources:
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+              requests:
+                memory: "256Mi"
+                cpu: "250m"
+            
+            env:
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+            
+            volumeMounts:
+            - name: tmp-volume
+              mountPath: /tmp
+          
+          volumes:
+          - name: tmp-volume
+            emptyDir:
+              sizeLimit: "1Gi"

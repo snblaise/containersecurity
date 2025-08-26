@@ -1,0 +1,78 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowPushPull",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::ACCOUNT_ID:role/CodeBuildServiceRole",
+          "arn:aws:iam::ACCOUNT_ID:role/EKSNodeInstanceRole",
+          "arn:aws:iam::ACCOUNT_ID:role/EKSFargateExecutionRole"
+        ]
+      },
+      "Action": [
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:DescribeRepositories",
+        "ecr:GetRepositoryPolicy",
+        "ecr:ListImages",
+        "ecr:DescribeImages",
+        "ecr:BatchDeleteImage",
+        "ecr:GetLifecyclePolicy",
+        "ecr:GetLifecyclePolicyPreview",
+        "ecr:ListTagsForResource",
+        "ecr:DescribeImageScanFindings"
+      ]
+    },
+    {
+      "Sid": "AllowImageSigning",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::ACCOUNT_ID:role/CodeBuildServiceRole"
+        ]
+      },
+      "Action": [
+        "ecr:PutImageTagMutability",
+        "ecr:StartImageScan",
+        "ecr:DescribeImageScanFindings",
+        "ecr:GetAuthorizationToken"
+      ]
+    },
+    {
+      "Sid": "DenyDeleteOfSignedImages",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "ecr:BatchDeleteImage",
+        "ecr:PutImage"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ecr:ImageTag": [
+            "prod-*",
+            "release-*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "RequireSSL",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "*",
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    }
+  ]
+}

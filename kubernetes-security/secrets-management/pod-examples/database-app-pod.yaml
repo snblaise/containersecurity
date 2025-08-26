@@ -1,0 +1,112 @@
+# Example pod with database secrets mounted via Secrets Store CSI Driver
+apiVersion: v1
+kind: Pod
+metadata:
+  name: database-app
+  namespace: default
+  labels:
+    app: database-app
+    security.policy: restricted
+spec:
+  serviceAccountName: database-app-sa
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: app
+    image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/secure-app:latest
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+    # Environment variables from mounted secrets
+    env:
+    - name: DB_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: database-secret
+          key: username
+    - name: DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: database-secret
+          key: password
+    - name: DB_HOST
+      valueFrom:
+        secretKeyRef:
+          name: database-secret
+          key: host
+    - name: DB_PORT
+      valueFrom:
+        secretKeyRef:
+          name: database-secret
+          key: port
+    # Volume mounts for secrets files
+    volumeMounts:
+    - name: secrets-store
+      mountPath: "/mnt/secrets"
+      readOnly: true
+    - name: ssl-certs
+      mountPath: "/mnt/ssl"
+      readOnly: true
+    - name: tmp
+      mountPath: /tmp
+    - name: var-tmp
+      mountPath: /var/tmp
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8080
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  volumes:
+  # Secrets Store CSI Driver volume
+  - name: secrets-store
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: "database-secrets"
+  # SSL certificates volume
+  - name: ssl-certs
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: "database-secrets"
+  # Writable temporary directories
+  - name: tmp
+    emptyDir: {}
+  - name: var-tmp
+    emptyDir: {}
+  restartPolicy: Always
+  automountServiceAccountToken: true
+---
+# Service account with IRSA for secrets access
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: database-app-sa
+  namespace: default
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/EKSDatabaseAppRole
+automountServiceAccountToken: true

@@ -1,0 +1,157 @@
+# Deployment example with API secrets and TLS certificates
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  namespace: default
+  labels:
+    app: web-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+        security.policy: restricted
+    spec:
+      serviceAccountName: web-app-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: web-app
+        image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/web-app:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        # Environment variables from Kubernetes secrets (created by CSI driver)
+        envFrom:
+        - secretRef:
+            name: api-secret
+        - secretRef:
+            name: application-config-secret
+        # Additional environment variables
+        env:
+        - name: TLS_CERT_PATH
+          value: "/mnt/tls/tls.crt"
+        - name: TLS_KEY_PATH
+          value: "/mnt/tls/tls.key"
+        - name: CA_CERT_PATH
+          value: "/mnt/ssl/ca_certificate"
+        - name: JWT_PRIVATE_KEY_PATH
+          value: "/mnt/secrets/jwt_private_key"
+        - name: JWT_PUBLIC_KEY_PATH
+          value: "/mnt/secrets/jwt_public_key"
+        volumeMounts:
+        # API secrets volume
+        - name: api-secrets
+          mountPath: "/mnt/secrets"
+          readOnly: true
+        # TLS certificates volume
+        - name: tls-certs
+          mountPath: "/mnt/tls"
+          readOnly: true
+        # Application configuration volume
+        - name: app-config
+          mountPath: "/mnt/config"
+          readOnly: true
+        # Writable directories
+        - name: tmp
+          mountPath: /tmp
+        - name: var-tmp
+          mountPath: /var/tmp
+        - name: cache
+          mountPath: /var/cache/app
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      # API secrets from Secrets Store CSI
+      - name: api-secrets
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "api-secrets"
+      # TLS certificates from Secrets Store CSI
+      - name: tls-certs
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "application-secrets"
+      # Application configuration from Secrets Store CSI
+      - name: app-config
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "application-secrets"
+      # Writable temporary directories
+      - name: tmp
+        emptyDir: {}
+      - name: var-tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir:
+          sizeLimit: 1Gi
+      restartPolicy: Always
+      automountServiceAccountToken: true
+---
+# Service account for web application
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web-app-sa
+  namespace: default
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/EKSWebAppRole
+automountServiceAccountToken: true
+---
+# Service for the web application
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app-service
+  namespace: default
+spec:
+  selector:
+    app: web-app
+  ports:
+  - name: https
+    port: 443
+    targetPort: 8443
+    protocol: TCP
+  type: ClusterIP

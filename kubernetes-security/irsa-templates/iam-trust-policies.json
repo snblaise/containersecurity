@@ -1,0 +1,173 @@
+{
+  "comment": "IAM Trust Policy Templates for IRSA",
+  "description": "These trust policies allow EKS service accounts to assume IAM roles",
+  
+  "basic_trust_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:NAMESPACE:SERVICE_ACCOUNT_NAME",
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:aud": "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  },
+
+  "s3_access_trust_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:production:s3-access-service-account",
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:aud": "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  },
+
+  "secrets_manager_trust_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:production:secrets-manager-service-account",
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:aud": "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  },
+
+  "cloudwatch_logs_trust_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:production:cloudwatch-logs-service-account",
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:aud": "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  },
+
+  "rds_access_trust_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:production:rds-access-service-account",
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:aud": "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  },
+
+  "ecr_access_trust_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:production:ecr-access-service-account",
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:aud": "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  },
+
+  "multi_namespace_trust_policy": {
+    "comment": "Trust policy that allows multiple namespaces to use the same role",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:aud": "sts.amazonaws.com"
+          },
+          "StringLike": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": [
+              "system:serviceaccount:production:*",
+              "system:serviceaccount:staging:*"
+            ]
+          }
+        }
+      }
+    ]
+  },
+
+  "conditional_trust_policy": {
+    "comment": "Trust policy with additional conditions for enhanced security",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:production:secure-service-account",
+            "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:aud": "sts.amazonaws.com"
+          },
+          "DateGreaterThan": {
+            "aws:TokenIssueTime": "2024-01-01T00:00:00Z"
+          },
+          "IpAddress": {
+            "aws:SourceIp": [
+              "10.0.0.0/8",
+              "172.16.0.0/12",
+              "192.168.0.0/16"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

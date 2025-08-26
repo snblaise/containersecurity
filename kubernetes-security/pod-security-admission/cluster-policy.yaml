@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pod-security-admission-config
+  namespace: kube-system
+data:
+  config.yaml: |
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AdmissionConfiguration
+    plugins:
+    - name: PodSecurity
+      configuration:
+        apiVersion: pod-security.admission.config.k8s.io/v1beta1
+        kind: PodSecurityConfiguration
+        defaults:
+          enforce: "baseline"
+          enforce-version: "v1.28"
+          audit: "restricted"
+          audit-version: "v1.28"
+          warn: "restricted"
+          warn-version: "v1.28"
+        exemptions:
+          usernames: []
+          runtimeClasses: []
+          namespaces: ["kube-system", "kube-public", "kube-node-lease"]
+---
+# ClusterRole for Pod Security Admission management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-security-admission-manager
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch"]

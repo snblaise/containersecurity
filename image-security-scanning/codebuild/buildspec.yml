@@ -1,0 +1,92 @@
+version: 0.2
+
+env:
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+    AWS_ACCOUNT_ID: "123456789012"
+    IMAGE_REPO_NAME: "secure-app"
+    IMAGE_TAG: "latest"
+  parameter-store:
+    VULNERABILITY_THRESHOLD_CRITICAL: "/container-security/vulnerability-thresholds/critical"
+    VULNERABILITY_THRESHOLD_HIGH: "/container-security/vulnerability-thresholds/high"
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      - echo Setting vulnerability thresholds - Critical:$VULNERABILITY_THRESHOLD_CRITICAL High:$VULNERABILITY_THRESHOLD_HIGH
+
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+      - docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $REPOSITORY_URI:$IMAGE_TAG
+      - docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $REPOSITORY_URI:latest
+
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker images...
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - docker push $REPOSITORY_URI:latest
+      - echo Waiting for Inspector scan to complete...
+      - |
+        # Wait for Inspector scan results
+        SCAN_STATUS="IN_PROGRESS"
+        TIMEOUT=300
+        ELAPSED=0
+        
+        while [ "$SCAN_STATUS" = "IN_PROGRESS" ] && [ $ELAPSED -lt $TIMEOUT ]; do
+          sleep 30
+          ELAPSED=$((ELAPSED + 30))
+          SCAN_RESULT=$(aws ecr describe-image-scan-findings --repository-name $IMAGE_REPO_NAME --image-id imageTag=$IMAGE_TAG --region $AWS_DEFAULT_REGION 2>/dev/null || echo "SCAN_NOT_FOUND")
+          
+          if [ "$SCAN_RESULT" != "SCAN_NOT_FOUND" ]; then
+            SCAN_STATUS=$(echo $SCAN_RESULT | jq -r '.imageScanStatus.status')
+            echo "Scan status: $SCAN_STATUS (${ELAPSED}s elapsed)"
+          else
+            echo "Scan not yet available (${ELAPSED}s elapsed)"
+          fi
+        done
+      - |
+        # Check vulnerability thresholds
+        if [ "$SCAN_STATUS" = "COMPLETE" ]; then
+          CRITICAL_COUNT=$(echo $SCAN_RESULT | jq -r '.imageScanFindings.findingCounts.CRITICAL // 0')
+          HIGH_COUNT=$(echo $SCAN_RESULT | jq -r '.imageScanFindings.findingCounts.HIGH // 0')
+          MEDIUM_COUNT=$(echo $SCAN_RESULT | jq -r '.imageScanFindings.findingCounts.MEDIUM // 0')
+          LOW_COUNT=$(echo $SCAN_RESULT | jq -r '.imageScanFindings.findingCounts.LOW // 0')
+          
+          echo "Vulnerability Summary:"
+          echo "  Critical: $CRITICAL_COUNT"
+          echo "  High: $HIGH_COUNT"
+          echo "  Medium: $MEDIUM_COUNT"
+          echo "  Low: $LOW_COUNT"
+          
+          # Fail build if thresholds exceeded
+          if [ "$CRITICAL_COUNT" -gt "${VULNERABILITY_THRESHOLD_CRITICAL:-0}" ]; then
+            echo "CRITICAL vulnerabilities ($CRITICAL_COUNT) exceed threshold (${VULNERABILITY_THRESHOLD_CRITICAL:-0})"
+            exit 1
+          fi
+          
+          if [ "$HIGH_COUNT" -gt "${VULNERABILITY_THRESHOLD_HIGH:-5}" ]; then
+            echo "HIGH vulnerabilities ($HIGH_COUNT) exceed threshold (${VULNERABILITY_THRESHOLD_HIGH:-5})"
+            exit 1
+          fi
+          
+          echo "Image passed vulnerability threshold checks"
+        else
+          echo "Scan did not complete within timeout period"
+          exit 1
+        fi
+      - echo Writing image definitions file...
+      - printf '[{"name":"app","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
+    - '**/*'

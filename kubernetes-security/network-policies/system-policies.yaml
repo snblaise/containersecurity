@@ -1,0 +1,129 @@
+# System and Infrastructure NetworkPolicies
+# Policies for system components, monitoring, and infrastructure services
+
+# Allow kube-system namespace to communicate with all pods (required for cluster operations)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-system
+  namespace: production
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  # Allow traffic from kube-system namespace (kubelet, kube-proxy, etc.)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+
+---
+# Allow monitoring namespace to scrape metrics
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      monitoring: "true"  # Only pods with this label expose metrics
+  policyTypes:
+  - Ingress
+  ingress:
+  # Allow Prometheus to scrape metrics
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    - podSelector:
+        matchLabels:
+          app: prometheus
+    ports:
+    - protocol: TCP
+      port: 8080  # Metrics endpoint
+    - protocol: TCP
+      port: 9090  # Alternative metrics port
+
+---
+# AWS Load Balancer Controller policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-load-balancer-controller
+  namespace: kube-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aws-load-balancer-controller
+  policyTypes:
+  - Egress
+  egress:
+  # Allow communication to AWS APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow communication to target pods
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 3000
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+# EBS CSI Driver policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ebs-csi-controller
+  namespace: kube-system
+spec:
+  podSelector:
+    matchLabels:
+      app: ebs-csi-controller
+  policyTypes:
+  - Egress
+  egress:
+  # Allow communication to AWS APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+# Secrets Store CSI Driver policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: secrets-store-csi-driver
+  namespace: kube-system
+spec:
+  podSelector:
+    matchLabels:
+      app: secrets-store-csi-driver
+  policyTypes:
+  - Egress
+  egress:
+  # Allow communication to AWS Secrets Manager
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53

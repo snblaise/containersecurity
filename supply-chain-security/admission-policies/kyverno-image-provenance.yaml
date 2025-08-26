@@ -1,0 +1,317 @@
+# Kyverno policies for supply chain security and image provenance verification
+# Implements signature validation and provenance requirements for container deployments
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-provenance
+  annotations:
+    policies.kyverno.io/title: Verify Image Provenance
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/minversion: 1.7.0
+    policies.kyverno.io/description: >-
+      This policy verifies that container images have valid provenance metadata
+      and are signed with trusted keys. It ensures only images from approved
+      registries with proper supply chain attestations are deployed.
+spec:
+  validationFailureAction: enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    - name: verify-image-registry
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      verifyImages:
+      - imageReferences:
+        - "*.dkr.ecr.*.amazonaws.com/*"
+        - "123456789012.dkr.ecr.us-east-1.amazonaws.com/*"  # Replace with actual account ID
+        attestors:
+        - count: 1
+          entries:
+          - keys:
+              publicKeys: |-
+                -----BEGIN PUBLIC KEY-----
+                # Replace with actual public key for image signing
+                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                -----END PUBLIC KEY-----
+        mutateDigest: true
+        verifyDigest: true
+        required: true
+      exclude:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            namespaces:
+            - kube-system
+            - kyverno
+            - cert-manager
+            names:
+            - "emergency-*"  # Emergency pods can bypass verification
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-image-attestations
+  annotations:
+    policies.kyverno.io/title: Require Image Attestations
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy requires that container images have valid SLSA provenance
+      attestations and SBOM attestations before deployment.
+spec:
+  validationFailureAction: enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    - name: require-slsa-provenance
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      verifyImages:
+      - imageReferences:
+        - "*.dkr.ecr.*.amazonaws.com/*"
+        attestations:
+        - predicateType: https://slsa.dev/provenance/v0.2
+          attestors:
+          - count: 1
+            entries:
+            - keys:
+                publicKeys: |-
+                  -----BEGIN PUBLIC KEY-----
+                  # Replace with actual attestation signing key
+                  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                  -----END PUBLIC KEY-----
+          conditions:
+          - all:
+            - key: "{{ invocation.configSource.uri }}"
+              operator: AnyIn
+              value:
+              - "https://github.com/your-org/*"  # Replace with actual repo patterns
+            - key: "{{ invocation.configSource.digest }}"
+              operator: AnyNotIn
+              value: [""]
+            - key: "{{ buildDefinition.buildType }}"
+              operator: Equals
+              value: "https://github.com/Attestations/GitHubActionsWorkflow@v1"
+        - predicateType: https://spdx.dev/Document
+          attestors:
+          - count: 1
+            entries:
+            - keys:
+                publicKeys: |-
+                  -----BEGIN PUBLIC KEY-----
+                  # SBOM signing key
+                  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                  -----END PUBLIC KEY-----
+      exclude:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            namespaces:
+            - kube-system
+            - kyverno
+            - emergency
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: validate-build-provenance
+  annotations:
+    policies.kyverno.io/title: Validate Build Provenance
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy validates that container images were built from approved
+      source repositories and build environments with proper security controls.
+spec:
+  validationFailureAction: enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    - name: validate-source-repository
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+      validate:
+        message: "Container images must be built from approved source repositories"
+        foreach:
+        - list: "request.object.spec.containers"
+          validate:
+            message: "Image {{ element.image }} does not have valid provenance from approved repository"
+            deny:
+              conditions:
+                any:
+                - key: "{{ element.image }}"
+                  operator: AnyNotIn
+                  value:
+                  - "*.dkr.ecr.*.amazonaws.com/*"
+                  - "123456789012.dkr.ecr.us-east-1.amazonaws.com/*"  # Replace with actual account
+      exclude:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            namespaces:
+            - kube-system
+            - kyverno
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-unsigned-images
+  annotations:
+    policies.kyverno.io/title: Block Unsigned Images
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy blocks deployment of container images that are not signed
+      with approved signing keys or do not have valid signatures.
+spec:
+  validationFailureAction: enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    - name: require-image-signature
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+            - Job
+            - CronJob
+      verifyImages:
+      - imageReferences:
+        - "*"
+        attestors:
+        - count: 1
+          entries:
+          - keys:
+              publicKeys: |-
+                -----BEGIN PUBLIC KEY-----
+                # Primary image signing key
+                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                -----END PUBLIC KEY-----
+          - keys:
+              publicKeys: |-
+                -----BEGIN PUBLIC KEY-----
+                # Secondary image signing key for redundancy
+                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                -----END PUBLIC KEY-----
+        mutateDigest: true
+        verifyDigest: true
+        required: true
+      exclude:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            namespaces:
+            - kube-system
+            - kyverno
+            - cert-manager
+            - ingress-nginx
+            names:
+            - "emergency-*"
+        - resources:
+            kinds:
+            - Pod
+            annotations:
+              "security.policy/emergency-override": "true"
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: validate-vulnerability-scan-results
+  annotations:
+    policies.kyverno.io/title: Validate Vulnerability Scan Results
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      This policy validates that container images have been scanned for
+      vulnerabilities and meet security thresholds before deployment.
+spec:
+  validationFailureAction: enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    - name: require-vulnerability-scan-attestation
+      match:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            - Deployment
+            - StatefulSet
+            - DaemonSet
+      verifyImages:
+      - imageReferences:
+        - "*.dkr.ecr.*.amazonaws.com/*"
+        attestations:
+        - predicateType: https://cosign.sigstore.dev/attestation/vuln/v1
+          attestors:
+          - count: 1
+            entries:
+            - keys:
+                publicKeys: |-
+                  -----BEGIN PUBLIC KEY-----
+                  # Vulnerability scan attestation signing key
+                  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+                  -----END PUBLIC KEY-----
+          conditions:
+          - all:
+            - key: "{{ scanner.name }}"
+              operator: Equals
+              value: "trivy"
+            - key: "{{ scanner.version }}"
+              operator: AnyIn
+              value: ["0.48.*", "0.49.*", "0.50.*"]
+            - key: "{{ metadata.scanResult.summary.CRITICAL || `0` }}"
+              operator: LessThanOrEquals
+              value: "0"
+            - key: "{{ metadata.scanResult.summary.HIGH || `0` }}"
+              operator: LessThanOrEquals
+              value: "5"
+      exclude:
+        any:
+        - resources:
+            kinds:
+            - Pod
+            namespaces:
+            - kube-system
+            - kyverno

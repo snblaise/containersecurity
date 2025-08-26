@@ -1,0 +1,258 @@
+# Comprehensive Pod-level SecurityContext Examples
+# These examples demonstrate secure pod configurations following restricted Pod Security Standards
+
+---
+# Example 1: Basic secure pod with non-root user and security hardening
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-web-app
+  namespace: production
+  labels:
+    app: secure-web-app
+    security.aws.com/profile: restricted
+spec:
+  # Pod-level security context
+  securityContext:
+    # Run as non-root user
+    runAsNonRoot: true
+    runAsUser: 65534  # nobody user
+    runAsGroup: 65534 # nobody group
+    fsGroup: 65534    # File system group for volume ownership
+    
+    # Security profiles
+    seccompProfile:
+      type: RuntimeDefault  # Use default seccomp profile
+    
+    # Supplemental groups (optional)
+    supplementalGroups: [65534]
+    
+    # File system group change policy
+    fsGroupChangePolicy: "OnRootMismatch"
+  
+  containers:
+  - name: web-server
+    image: nginx:1.21-alpine
+    
+    # Container-level security context
+    securityContext:
+      # Privilege restrictions
+      allowPrivilegeEscalation: false
+      privileged: false
+      
+      # Read-only root filesystem
+      readOnlyRootFilesystem: true
+      
+      # Drop all capabilities
+      capabilities:
+        drop:
+        - ALL
+      
+      # Run as specific non-root user (overrides pod-level if needed)
+      runAsNonRoot: true
+      runAsUser: 65534
+    
+    # Resource limits for security
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+    
+    # Volume mounts for writable directories
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+    - name: var-cache-nginx
+      mountPath: /var/cache/nginx
+    - name: var-run
+      mountPath: /var/run
+    
+    # Health checks
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 8080
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  
+  # Volumes for writable directories (since root filesystem is read-only)
+  volumes:
+  - name: tmp-volume
+    emptyDir:
+      sizeLimit: "100Mi"
+  - name: var-cache-nginx
+    emptyDir:
+      sizeLimit: "50Mi"
+  - name: var-run
+    emptyDir:
+      sizeLimit: "10Mi"
+  
+  # Additional pod security settings
+  restartPolicy: Always
+  terminationGracePeriodSeconds: 30
+  
+  # Node selection and affinity for security
+  nodeSelector:
+    kubernetes.io/os: linux
+  
+  tolerations:
+  - key: "node.kubernetes.io/not-ready"
+    operator: "Exists"
+    effect: "NoExecute"
+    tolerationSeconds: 300
+
+---
+# Example 2: Multi-container pod with different security contexts
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-multi-container
+  namespace: production
+  labels:
+    app: secure-multi-container
+    security.aws.com/profile: restricted
+spec:
+  # Pod-level security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containers:
+  # Main application container
+  - name: app-container
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "while true; do echo 'App running'; sleep 30; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      runAsNonRoot: true
+      runAsUser: 1000
+    
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+    
+    volumeMounts:
+    - name: app-tmp
+      mountPath: /tmp
+    - name: app-data
+      mountPath: /app/data
+  
+  # Sidecar container with different user
+  - name: sidecar-container
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "while true; do echo 'Sidecar running'; sleep 60; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      runAsNonRoot: true
+      runAsUser: 2000  # Different user than main container
+      runAsGroup: 2000
+    
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+    
+    volumeMounts:
+    - name: sidecar-tmp
+      mountPath: /tmp
+  
+  volumes:
+  - name: app-tmp
+    emptyDir:
+      sizeLimit: "100Mi"
+  - name: app-data
+    emptyDir:
+      sizeLimit: "1Gi"
+  - name: sidecar-tmp
+    emptyDir:
+      sizeLimit: "50Mi"
+
+---
+# Example 3: Pod with custom seccomp profile and AppArmor
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-custom-profiles
+  namespace: production
+  labels:
+    app: secure-custom-profiles
+  annotations:
+    # AppArmor profile (if available on nodes)
+    container.apparmor.security.beta.kubernetes.io/secure-app: runtime/default
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    
+    # Custom seccomp profile (example - would need to exist on nodes)
+    seccompProfile:
+      type: Localhost
+      localhostProfile: profiles/secure-app.json
+  
+  containers:
+  - name: secure-app
+    image: alpine:3.18
+    command: ["/bin/sh", "-c", "while true; do echo 'Secure app with custom profiles'; sleep 30; done"]
+    
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+        # Only add specific capabilities if absolutely necessary
+        # add:
+        # - NET_BIND_SERVICE  # Example: if app needs to bind to port < 1024
+      
+      runAsNonRoot: true
+      runAsUser: 10001
+    
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+    
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+  
+  volumes:
+  - name: tmp-volume
+    emptyDir:
+      sizeLimit: "50Mi"

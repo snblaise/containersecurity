@@ -1,0 +1,99 @@
+version: 0.2
+
+# CodeBuild buildspec for container image build after security gates pass
+# This runs only after SAST/SCA security gates have passed
+
+env:
+  variables:
+    DOCKER_BUILDKIT: "1"
+
+phases:
+  install:
+    runtime-versions:
+      docker: 20
+    commands:
+      - echo "Installing image build dependencies..."
+      
+      # Install Cosign for image signing
+      - curl -O -L "https://github.com/sigstore/cosign/releases/download/v2.2.1/cosign-linux-amd64"
+      - mv cosign-linux-amd64 /usr/local/bin/cosign
+      - chmod +x /usr/local/bin/cosign
+
+  pre_build:
+    commands:
+      - echo "Preparing for image build..."
+      - echo "Build started on `date`"
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      
+      # Set image tag
+      - IMAGE_TAG=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$CODEBUILD_RESOLVED_SOURCE_VERSION
+      - IMAGE_TAG_LATEST=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:latest
+      - echo "Image will be tagged as $IMAGE_TAG"
+
+  build:
+    commands:
+      - echo "Building Docker image..."
+      
+      # Build the image with security-focused build args
+      - |
+        docker build \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+          --build-arg VCS_REF=$CODEBUILD_RESOLVED_SOURCE_VERSION \
+          --build-arg VERSION=$CODEBUILD_RESOLVED_SOURCE_VERSION \
+          --label org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+          --label org.opencontainers.image.revision=$CODEBUILD_RESOLVED_SOURCE_VERSION \
+          --label org.opencontainers.image.source=$CODEBUILD_SOURCE_REPO_URL \
+          --label org.opencontainers.image.version=$CODEBUILD_RESOLVED_SOURCE_VERSION \
+          --label org.opencontainers.image.title="Secure Container Image" \
+          --label org.opencontainers.image.description="Container image built with security gates" \
+          -t $IMAGE_TAG \
+          -t $IMAGE_TAG_LATEST .
+      
+      - echo "Image built successfully"
+      - docker images
+
+  post_build:
+    commands:
+      - echo "Pushing image to ECR..."
+      
+      # Push both versioned and latest tags
+      - docker push $IMAGE_TAG
+      - docker push $IMAGE_TAG_LATEST
+      
+      # Get image digest for provenance
+      - IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $IMAGE_TAG | cut -d'@' -f2)
+      - echo "Image digest: $IMAGE_DIGEST"
+      
+      # Optional: Sign the image if signing key is available
+      - |
+        if [ ! -z "$COSIGN_PRIVATE_KEY" ]; then
+          echo "Signing container image..."
+          echo "$COSIGN_PRIVATE_KEY" | cosign sign --key env://COSIGN_PRIVATE_KEY $IMAGE_TAG
+          echo "Image signed successfully"
+        else
+          echo "No signing key provided, skipping image signing"
+        fi
+      
+      # Create deployment manifest with image reference
+      - |
+        mkdir -p /tmp/deployment
+        cat > /tmp/deployment/image-info.json << EOF
+        {
+          "imageTag": "$IMAGE_TAG",
+          "imageDigest": "$IMAGE_DIGEST",
+          "buildId": "$CODEBUILD_BUILD_ID",
+          "sourceVersion": "$CODEBUILD_RESOLVED_SOURCE_VERSION",
+          "buildTime": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        EOF
+      
+      - echo "Image build completed successfully"
+      - echo "Image: $IMAGE_TAG"
+      - echo "Digest: $IMAGE_DIGEST"
+
+artifacts:
+  files:
+    - '/tmp/deployment/image-info.json'
+  name: image-build-artifacts

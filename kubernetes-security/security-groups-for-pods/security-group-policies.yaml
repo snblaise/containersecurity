@@ -1,0 +1,86 @@
+# Security Groups for Pods (SGP) Configurations
+# These configurations enable pod-level security group assignment using AWS VPC CNI
+
+# SecurityGroupPolicy for web frontend pods
+apiVersion: vpcresources.k8s.aws/v1beta1
+kind: SecurityGroupPolicy
+metadata:
+  name: frontend-sgp
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+      tier: web
+  securityGroups:
+    groupIds:
+      - sg-frontend-web-12345678  # Replace with actual security group ID
+      - sg-common-egress-12345678  # Common egress rules
+
+---
+# SecurityGroupPolicy for backend API pods
+apiVersion: vpcresources.k8s.aws/v1beta1
+kind: SecurityGroupPolicy
+metadata:
+  name: backend-api-sgp
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+      tier: api
+  securityGroups:
+    groupIds:
+      - sg-backend-api-12345678
+      - sg-common-egress-12345678
+
+---
+# SecurityGroupPolicy for database pods
+apiVersion: vpcresources.k8s.aws/v1beta1
+kind: SecurityGroupPolicy
+metadata:
+  name: database-sgp
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: database
+      tier: data
+  securityGroups:
+    groupIds:
+      - sg-database-12345678
+      - sg-common-egress-12345678
+
+---
+# SecurityGroupPolicy for payment service (highly restricted)
+apiVersion: vpcresources.k8s.aws/v1beta1
+kind: SecurityGroupPolicy
+metadata:
+  name: payment-service-sgp
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: payment-service
+      tier: api
+      compliance: pci
+  securityGroups:
+    groupIds:
+      - sg-payment-service-12345678  # Highly restricted security group
+      - sg-pci-compliant-12345678    # PCI compliance security group
+
+---
+# SecurityGroupPolicy for monitoring pods
+apiVersion: vpcresources.k8s.aws/v1beta1
+kind: SecurityGroupPolicy
+metadata:
+  name: monitoring-sgp
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: prometheus
+  securityGroups:
+    groupIds:
+      - sg-monitoring-12345678
+      - sg-common-egress-12345678

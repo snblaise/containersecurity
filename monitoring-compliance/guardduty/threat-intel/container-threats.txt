@@ -1,0 +1,28 @@
+# Container Security Threat Intelligence Feed
+# Known malicious IPs and domains related to container attacks
+
+# Cryptocurrency mining pools commonly used in container attacks
+pool.minergate.com
+xmr-eu1.nanopool.org
+eth-eu1.nanopool.org
+stratum+tcp://xmr.pool.minergate.com:45700
+
+# Known malicious container registries
+malicious-registry.example.com
+fake-docker-hub.com
+compromised-registry.net
+
+# Command and control servers for container malware
+c2.container-malware.com
+botnet.container-attack.org
+malware-c2.example.net
+
+# Known bad IP addresses from container security incidents
+192.0.2.1
+198.51.100.1
+203.0.113.1
+
+# Domains used for container escape exploits
+container-escape.malware.com
+privilege-escalation.attack.org
+breakout.container-exploit.net
